@@ -1,17 +1,65 @@
+require('dotenv').config();
 const express = require('express');
-const db = require('./database');
+const cors = require('cors');
+const { createClient } = require('@supabase/supabase-js');
 
 const app = express();
+app.use(cors());
 app.use(express.json());
 
+const supabaseUrl = process.env.SUPABASE_URL || 'http://localhost:54321';
+const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || 'dummy';
+const supabase = createClient(supabaseUrl, supabaseKey);
+
+const PORT = process.env.PORT || 3000;
+
 /* =====================
-   Helpers
+   Helper validation functions
 ===================== */
 
+const COUNTRIES = [
+  { code: '+47', minLength: 8, maxLength: 8 }, // Norway
+  { code: '+46', minLength: 9, maxLength: 9 }, // Sweden
+  { code: '+45', minLength: 8, maxLength: 8 }, // Denmark
+  { code: '+44', minLength: 10, maxLength: 10 }, // UK
+  { code: '+49', minLength: 10, maxLength: 11 }, // Germany
+  { code: '+33', minLength: 9, maxLength: 9 }, // France
+  { code: '+39', minLength: 9, maxLength: 10 }, // Italy
+  { code: '+34', minLength: 9, maxLength: 9 }, // Spain
+  { code: '+48', minLength: 9, maxLength: 9 }, // Poland
+  { code: '+31', minLength: 9, maxLength: 9 }, // Netherlands
+  { code: '+358', minLength: 5, maxLength: 12 }, // Finland
+];
+
+function validatePhone(phoneStr) {
+  if (!phoneStr) return 'Phone number required';
+  const parts = phoneStr.split(' ');
+  if (parts.length < 2) return 'Invalid phone format, expected "+CODE NUMBER"';
+  
+  const code = parts[0];
+  const number = parts.slice(1).join('').replace(/\D/g, ''); // Extract only digits
+  
+  const country = COUNTRIES.find(c => c.code === code);
+  if (!country) return `Unsupported country code: ${code}`;
+  
+  if (number.length < country.minLength || number.length > country.maxLength) {
+    if (country.minLength === country.maxLength) {
+      return `Phone number for ${code} must be exactly ${country.minLength} digits`;
+    }
+    return `Phone number for ${code} must be between ${country.minLength} and ${country.maxLength} digits`;
+  }
+  
+  return null;
+}
+
 function parseBookingDateTime(dateStr, timeStr) {
-  const iso = `${dateStr}T${timeStr}:00`;
-  const d = new Date(iso);
-  return Number.isNaN(d.getTime()) ? null : d;
+  const [year, month, day] = dateStr.split('-').map(Number);
+  const [hours, minutes] = timeStr.split(':').map(Number);
+  
+  if (!year || !month || !day || isNaN(hours) || isNaN(minutes)) {
+    return null;
+  }
+  return new Date(year, month - 1, day, hours, minutes);
 }
 
 function validateBookingRules({ date, time, guests }) {
@@ -37,132 +85,107 @@ function validateBookingRules({ date, time, guests }) {
 }
 
 /* =====================
-   Basic
+   Areas & Tables
 ===================== */
 
-app.get('/health', (req, res) => {
-  res.json({ status: 'ok' });
+app.get('/areas', async (req, res) => {
+  const { data, error } = await supabase.from('areas').select('*');
+  if (error) return res.status(500).json({ error: 'Database error' });
+  res.json(data);
 });
 
-/* =====================
-   Areas
-===================== */
-
-app.get('/areas', (req, res) => {
-  db.all('SELECT * FROM areas ORDER BY id', [], (err, rows) => {
-    if (err) {
-      console.error('DB areas error:', err);
-      return res.status(500).json({ error: 'Database error' });
-    }
-    res.json(rows);
-  });
-});
-
-/* =====================
-   Tables
-===================== */
-
-app.get('/tables', (req, res) => {
-  const { areaId } = req.query;
-
-  let sql = `
-    SELECT t.*, a.name AS area_name, a.level, a.is_outdoor
-    FROM tables t
-    JOIN areas a ON t.area_id = a.id
-  `;
-  const params = [];
-
+app.get('/tables', async (req, res) => {
+  const areaId = req.query.areaId;
+  let query = supabase.from('tables').select('*');
   if (areaId) {
-    sql += ' WHERE t.area_id = ?';
-    params.push(Number(areaId));
+    query = query.eq('area_id', Number(areaId));
   }
-
-  sql += ' ORDER BY t.id';
-
-  db.all(sql, params, (err, rows) => {
-    if (err) {
-      console.error('DB tables error:', err);
-      return res.status(500).json({ error: 'Database error' });
-    }
-    res.json(rows);
-  });
+  const { data, error } = await query;
+  if (error) { console.error('GET /tables error:', error); return res.status(500).json({ error: 'Database error' }); }
+  res.json(data);
 });
 
-// Availability (filters by level + outdoor, blocks pending/accepted only)
-app.get('/tables/availability', (req, res) => {
+/* =====================
+   Availability Check
+===================== */
+app.get('/tables/availability', async (req, res) => {
   const { date, time, guests, level, outdoor } = req.query;
 
-  if (!date || !time || !guests || !level || outdoor === undefined) {
-    return res.status(400).json({ error: 'Missing parameters' });
+  if (!date || !time || !guests) {
+    return res.status(400).json({ error: 'Missing date, time, or guests' });
   }
 
-  const guestsNum = Number(guests);
-  const levelNum = Number(level);
-  const outdoorNum = Number(outdoor);
+  // Find tables matching area criteria
+  let areaQuery = supabase.from('areas').select('id');
+  if (level !== undefined) areaQuery = areaQuery.eq('level', Number(level));
+  if (outdoor !== undefined) areaQuery = areaQuery.eq('outdoor', outdoor === 'true');
+  
+  const { data: areas, error: areaErr } = await areaQuery;
+  if (areaErr) return res.status(500).json({ error: 'Database error' });
+  
+  const areaIds = areas.map(a => a.id);
+  if (areaIds.length === 0) return res.json([]);
 
-  if (!Number.isInteger(guestsNum) || guestsNum <= 0) {
-    return res.status(400).json({ error: 'Invalid guests' });
-  }
-  if (![1, 2].includes(levelNum)) {
-    return res.status(400).json({ error: 'Invalid level' });
-  }
-  if (![0, 1].includes(outdoorNum)) {
-    return res.status(400).json({ error: 'Invalid outdoor (use 0 or 1)' });
-  }
+  const { data: tables, error: tableErr } = await supabase
+    .from('tables')
+    .select('*')
+    .in('area_id', areaIds)
+    .gte('capacity', Number(guests));
 
-  const sql = `
-    SELECT t.id, t.name, t.capacity, a.name AS area
-    FROM tables t
-    JOIN areas a ON t.area_id = a.id
-    WHERE t.capacity >= ?
-      AND a.level = ?
-      AND a.is_outdoor = ?
-      AND t.id NOT IN (
-        SELECT table_id
-        FROM reservations
-        WHERE date = ? AND time = ?
-          AND status IN ('pending', 'accepted')
-      )
-    ORDER BY t.capacity ASC, t.name ASC
-  `;
+  if (tableErr) return res.status(500).json({ error: 'Database error' });
 
-  db.all(sql, [guestsNum, levelNum, outdoorNum, date, time], (err, rows) => {
-    if (err) {
-      console.error('DB availability error:', err);
-      return res.status(500).json({ error: 'Database error' });
-    }
-    res.json(rows);
-  });
+  // Get conflicting reservations
+  const { data: reservations, error: resErr } = await supabase
+    .from('reservations')
+    .select('table_id')
+    .eq('date', date)
+    .eq('time', time)
+    .in('status', ['pending', 'accepted']);
+
+  if (resErr) return res.status(500).json({ error: 'Database error' });
+
+  const bookedTableIds = new Set(reservations.map(r => r.table_id));
+  const availableTables = tables.filter(t => !bookedTableIds.has(t.id));
+
+  res.json(availableTables);
 });
 
 /* =====================
    Reservations (Admin + Requests)
 ===================== */
 
-// Admin: list reservations
-app.get('/reservations', (req, res) => {
-  const sql = `
-    SELECT r.id, r.status, r.date, r.time, r.guests, r.name, r.phone, r.created_at, r.expires_at,
-           t.name AS table_name,
-           a.name AS area_name
-    FROM reservations r
-    LEFT JOIN tables t ON r.table_id = t.id
-    LEFT JOIN areas a ON t.area_id = a.id
-    ORDER BY r.date ASC, r.time ASC
-  `;
+app.get('/reservations', async (req, res) => {
+  const { data, error } = await supabase
+    .from('reservations')
+    .select(`
+      id, status, date, time, guests, name, phone, created_at, expires_at, table_id,
+      tables (name, areas(name))
+    `)
+    .order('date', { ascending: true })
+    .order('time', { ascending: true });
 
-  db.all(sql, [], (err, rows) => {
-    if (err) {
-      console.error('DB reservations list error:', err);
-      return res.status(500).json({ error: 'Database error' });
-    }
-    res.json(rows);
-  });
+  if (error) return res.status(500).json({ error: 'Database error' });
+
+  // Flatten the response to match old format
+  const formattedData = data.map(r => ({
+    id: r.id,
+    status: r.status,
+    date: r.date,
+    time: r.time,
+    guests: r.guests,
+    name: r.name,
+    phone: r.phone,
+    created_at: r.created_at,
+    expires_at: r.expires_at,
+    table_name: r.tables?.name,
+    table_id: r.table_id,
+    area_name: r.tables?.areas?.name
+  }));
+
+  res.json(formattedData);
 });
 
-// Create reservation request (pending). Phone is optional.
-// ✅ Includes double-booking prevention for same table+slot
-app.post('/reservations', (req, res) => {
+app.post('/reservations', async (req, res) => {
   const { tableId, name, phone, date, time, guests } = req.body;
 
   if (!tableId || !name || !date || !time || !guests) {
@@ -174,150 +197,186 @@ app.post('/reservations', (req, res) => {
     return res.status(400).json({ error: ruleError });
   }
 
-  // Prevent double booking for same table+slot (pending/accepted)
-  db.get(
-    `
-      SELECT id
-      FROM reservations
-      WHERE table_id = ?
-        AND date = ?
-        AND time = ?
-        AND status IN ('pending', 'accepted')
-      LIMIT 1
-    `,
-    [Number(tableId), date, time],
-    (checkErr, existing) => {
-      if (checkErr) {
-        console.error('DB check error:', checkErr);
-        return res.status(500).json({ error: 'Database error' });
-      }
-
-      if (existing) {
-        return res.status(409).json({ error: 'Table already reserved for this time' });
-      }
-
-      const sql = `
-        INSERT INTO reservations (table_id, name, phone, date, time, guests, status, expires_at)
-        VALUES (?, ?, ?, ?, ?, ?, 'pending', datetime(? || ' ' || ?, '+30 minutes'))
-      `;
-
-      db.run(
-        sql,
-        [Number(tableId), name, phone || null, date, time, Number(guests), date, time],
-        function (err) {
-          if (err) {
-            console.error('DB insert error:', err);
-            return res.status(500).json({ error: 'Database error' });
-          }
-          return res.status(201).json({ id: this.lastID, status: 'pending' });
-        }
-      );
-    }
-  );
-});
-
-// Admin: cancel (delete) reservation
-app.delete('/reservations/:id', (req, res) => {
-  const id = Number(req.params.id);
-
-  if (Number.isNaN(id)) {
-    return res.status(400).json({ error: 'Invalid id' });
+  const phoneError = validatePhone(phone);
+  if (phoneError) {
+    return res.status(400).json({ error: phoneError });
   }
 
-  db.run('DELETE FROM reservations WHERE id = ?', [id], function (err) {
-    if (err) {
-      console.error('DB delete error:', err);
-      return res.status(500).json({ error: 'Database error' });
-    }
-    if (this.changes === 0) {
-      return res.status(404).json({ error: 'Reservation not found' });
-    }
-    return res.json({ deleted: true, id });
-  });
+  // Table capacity check
+  const { data: table, error: tableErr } = await supabase
+    .from('tables')
+    .select('capacity')
+    .eq('id', Number(tableId))
+    .single();
+
+  if (tableErr) console.error('Table fetch error:', tableErr);
+  if (tableErr || !table) return res.status(404).json({ error: 'Table not found' });
+
+  if (Number(guests) > table.capacity) {
+    return res.status(400).json({ error: `This table only has capacity for ${table.capacity} guests` });
+  }
+
+  // Prevent double booking
+  const { data: existing, error: checkErr } = await supabase
+    .from('reservations')
+    .select('id')
+    .eq('table_id', Number(tableId))
+    .eq('date', date)
+    .eq('time', time)
+    .in('status', ['pending', 'accepted'])
+    .limit(1)
+    .maybeSingle();
+
+  if (checkErr) return res.status(500).json({ error: 'Database error' });
+  if (existing) return res.status(409).json({ error: 'Table already reserved for this time' });
+
+  // Expires at logic (+30 mins)
+  const dt = parseBookingDateTime(date, time);
+  dt.setMinutes(dt.getMinutes() + 30);
+  const expires_at = dt.toISOString();
+
+  const { data: inserted, error: insertErr } = await supabase
+    .from('reservations')
+    .insert([{
+      table_id: Number(tableId),
+      name,
+      phone: phone || null,
+      date,
+      time,
+      guests: Number(guests),
+      status: 'pending',
+      expires_at
+    }])
+    .select('id')
+    .single();
+
+  if (insertErr) return res.status(500).json({ error: 'Database error' });
+
+  res.status(201).json({ id: inserted.id, status: 'pending' });
 });
 
-// Admin: accept request (only pending -> accepted)
-app.patch('/reservations/:id/accept', (req, res) => {
+app.delete('/reservations/:id', async (req, res) => {
   const id = Number(req.params.id);
   if (Number.isNaN(id)) return res.status(400).json({ error: 'Invalid id' });
 
-  db.run(
-    `UPDATE reservations SET status='accepted' WHERE id=? AND status='pending'`,
-    [id],
-    function (err) {
-      if (err) {
-        console.error('DB accept error:', err);
-        return res.status(500).json({ error: 'Database error' });
-      }
-      if (this.changes === 0) {
-        return res.status(404).json({ error: 'Not found or not pending' });
-      }
-      res.json({ id, status: 'accepted' });
-    }
-  );
+  const { error, count } = await supabase
+    .from('reservations')
+    .delete({ count: 'exact' })
+    .eq('id', id);
+
+  if (error) return res.status(500).json({ error: 'Database error' });
+  if (count === 0) return res.status(404).json({ error: 'Reservation not found' });
+
+  res.json({ deleted: true, id });
 });
 
-// Admin: decline request (pending OR accepted -> declined)
-app.patch('/reservations/:id/decline', (req, res) => {
+app.put('/reservations/:id', async (req, res) => {
+  console.log("PUT /reservations/:id - Received from frontend:", req.body);
   const id = Number(req.params.id);
   if (Number.isNaN(id)) return res.status(400).json({ error: 'Invalid id' });
 
-  db.run(
-    `UPDATE reservations SET status='declined' WHERE id=? AND status IN ('pending','accepted')`,
-    [id],
-    function (err) {
-      if (err) {
-        console.error('DB decline error:', err);
-        return res.status(500).json({ error: 'Database error' });
-      }
-      if (this.changes === 0) {
-        return res.status(404).json({ error: 'Not found or not pending/accepted' });
-      }
-      res.json({ id, status: 'declined' });
-    }
-  );
+  const { tableId, name, phone, date, time, guests, status } = req.body;
+  if (!tableId || !name || !date || !time || !guests || !status) {
+    console.log("Validation failed! Missing one of:", { tableId, name, date, time, guests, status });
+    return res.status(400).json({ error: 'Missing fields' });
+  }
+
+  // Table capacity check
+  const { data: table, error: tableErr } = await supabase
+    .from('tables')
+    .select('capacity')
+    .eq('id', Number(tableId))
+    .single();
+
+  if (tableErr || !table) return res.status(404).json({ error: 'Table not found' });
+  if (Number(guests) > table.capacity) {
+    return res.status(400).json({ error: `This table only has capacity for ${table.capacity} guests` });
+  }
+
+  // Double booking check for edit
+  const { data: existing, error: checkErr } = await supabase
+    .from('reservations')
+    .select('id')
+    .eq('table_id', Number(tableId))
+    .eq('date', date)
+    .eq('time', time)
+    .in('status', ['pending', 'accepted'])
+    .neq('id', id)
+    .limit(1)
+    .maybeSingle();
+
+  if (checkErr) return res.status(500).json({ error: 'Database error' });
+  if (existing) return res.status(409).json({ error: 'Table already reserved for this time' });
+
+  const { data: updated, error: updateErr } = await supabase
+    .from('reservations')
+    .update({
+      table_id: Number(tableId),
+      name,
+      phone: phone || null,
+      date,
+      time,
+      guests: Number(guests),
+      status
+    })
+    .eq('id', id)
+    .select();
+
+  if (updateErr) return res.status(500).json({ error: 'Database error' });
+  if (!updated || updated.length === 0) return res.status(404).json({ error: 'Reservation not found' });
+
+  res.json({ id, status: 'updated' });
+});
+
+app.patch('/reservations/:id/accept', async (req, res) => {
+  const id = Number(req.params.id);
+  if (Number.isNaN(id)) return res.status(400).json({ error: 'Invalid id' });
+
+  const { data: updated, error } = await supabase
+    .from('reservations')
+    .update({ status: 'accepted' })
+    .eq('id', id)
+    .eq('status', 'pending')
+    .select();
+
+  if (error) return res.status(500).json({ error: 'Database error' });
+  if (!updated || updated.length === 0) return res.status(404).json({ error: 'Not found or not pending' });
+
+  res.json({ id, status: 'accepted' });
+});
+
+app.patch('/reservations/:id/decline', async (req, res) => {
+  const id = Number(req.params.id);
+  if (Number.isNaN(id)) return res.status(400).json({ error: 'Invalid id' });
+
+  const { data: updated, error } = await supabase
+    .from('reservations')
+    .update({ status: 'declined' })
+    .eq('id', id)
+    .in('status', ['pending', 'accepted'])
+    .select();
+
+  if (error) return res.status(500).json({ error: 'Database error' });
+  if (!updated || updated.length === 0) return res.status(404).json({ error: 'Not found or not pending/accepted' });
+
+  res.json({ id, status: 'declined' });
 });
 
 /* =====================
    Expiration job (no-show)
 ===================== */
-
-function expireOldReservations() {
-  const sql = `
-    UPDATE reservations
-    SET status='expired'
-    WHERE status IN ('pending','accepted')
-      AND expires_at IS NOT NULL
-      AND datetime('now') > datetime(expires_at)
-  `;
-
-  db.run(sql, [], function (err) {
-    if (err) console.error('Expire job error:', err);
-  });
+async function expireOldReservations() {
+  const now = new Date().toISOString();
+  await supabase
+    .from('reservations')
+    .update({ status: 'expired' })
+    .in('status', ['pending', 'accepted'])
+    .lt('expires_at', now);
 }
 
-// run every minute
-setInterval(expireOldReservations, 60 * 1000);
+setInterval(expireOldReservations, 60000);
+expireOldReservations();
 
-/* =====================
-   Debug (optional - remove later)
-===================== */
-
-app.get('/debug/reservations-raw', (req, res) => {
-  db.all('SELECT * FROM reservations ORDER BY id DESC', [], (err, rows) => {
-    if (err) {
-      console.error('DB debug error:', err);
-      return res.status(500).json({ error: 'Database error' });
-    }
-    res.json(rows);
-  });
-});
-
-/* =====================
-   Start server
-===================== */
-
-const PORT = 3000;
 app.listen(PORT, () => {
-  console.log(`Server running on http://localhost:${PORT}`);
+  console.log(`Supabase Server running on http://localhost:${PORT}`);
 });
