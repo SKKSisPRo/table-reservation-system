@@ -11,7 +11,7 @@ const supabaseUrl = process.env.SUPABASE_URL || 'http://localhost:54321';
 const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || 'dummy';
 const supabase = createClient(supabaseUrl, supabaseKey);
 
-const PORT = process.env.PORT || 3000;
+const PORT = 5000;
 
 /* =====================
    Helper validation functions
@@ -158,7 +158,7 @@ app.get('/reservations', async (req, res) => {
   const { data, error } = await supabase
     .from('reservations')
     .select(`
-      id, status, date, time, guests, name, phone, created_at, expires_at, table_id,
+      id, status, date, time, guests, name, phone, created_at, expires_at, table_id, additional_info,
       tables (name, areas(name))
     `)
     .order('date', { ascending: true })
@@ -179,14 +179,16 @@ app.get('/reservations', async (req, res) => {
     expires_at: r.expires_at,
     table_name: r.tables?.name,
     table_id: r.table_id,
-    area_name: r.tables?.areas?.name
+    area_name: r.tables?.areas?.name,
+    additionalInfo: r.additional_info || ""
   }));
 
   res.json(formattedData);
 });
 
 app.post('/reservations', async (req, res) => {
-  const { tableId, name, phone, date, time, guests } = req.body;
+  console.log("📥 API RECEIVED:", req.body);
+  const { tableId, name, phone, date, time, guests, additionalInfo } = req.body;
 
   if (!tableId || !name || !date || !time || !guests) {
     return res.status(400).json({ error: 'Missing fields' });
@@ -235,24 +237,36 @@ app.post('/reservations', async (req, res) => {
   dt.setMinutes(dt.getMinutes() + 30);
   const expires_at = dt.toISOString();
 
-  const { data: inserted, error: insertErr } = await supabase
-    .from('reservations')
-    .insert([{
-      table_id: Number(tableId),
-      name,
-      phone: phone || null,
-      date,
-      time,
-      guests: Number(guests),
-      status: 'pending',
-      expires_at
-    }])
-    .select('id')
-    .single();
+  const mappedObject = {
+    table_id: Number(tableId),
+    name,
+    phone: phone || null,
+    date,
+    time,
+    guests: Number(guests),
+    status: 'pending',
+    expires_at,
+    additional_info: additionalInfo || null
+  };
+  console.log("💾 SUPABASE MAPPING:", mappedObject);
 
-  if (insertErr) return res.status(500).json({ error: 'Database error' });
+  try {
+    const { data: inserted, error: insertErr } = await supabase
+      .from('reservations')
+      .insert([mappedObject])
+      .select('id')
+      .single();
 
-  res.status(201).json({ id: inserted.id, status: 'pending' });
+    if (insertErr) {
+      console.error('SUPABASE_CRASH_REPORT:', insertErr.message);
+      return res.status(500).json({ error: 'Database error' });
+    }
+
+    res.status(201).json({ id: inserted.id, status: 'pending' });
+  } catch (err) {
+    console.error('SUPABASE_CRASH_REPORT:', err.message);
+    return res.status(500).json({ error: 'Server error' });
+  }
 });
 
 app.delete('/reservations/:id', async (req, res) => {
@@ -275,9 +289,10 @@ app.put('/reservations/:id', async (req, res) => {
   const id = Number(req.params.id);
   if (Number.isNaN(id)) return res.status(400).json({ error: 'Invalid id' });
 
-  const { tableId, name, phone, date, time, guests, status } = req.body;
-  if (!tableId || !name || !date || !time || !guests || !status) {
-    console.log("Validation failed! Missing one of:", { tableId, name, date, time, guests, status });
+  const { tableId, table_id, name, phone, date, time, guests, status, additionalInfo } = req.body;
+  const actualTableId = tableId || table_id;
+  if (!actualTableId || !name || !date || !time || !guests || !status) {
+    console.log("Validation failed! Missing one of:", { tableId, table_id, name, date, time, guests, status });
     return res.status(400).json({ error: 'Missing fields' });
   }
 
@@ -285,7 +300,7 @@ app.put('/reservations/:id', async (req, res) => {
   const { data: table, error: tableErr } = await supabase
     .from('tables')
     .select('capacity')
-    .eq('id', Number(tableId))
+    .eq('id', Number(actualTableId))
     .single();
 
   if (tableErr || !table) return res.status(404).json({ error: 'Table not found' });
@@ -297,7 +312,7 @@ app.put('/reservations/:id', async (req, res) => {
   const { data: existing, error: checkErr } = await supabase
     .from('reservations')
     .select('id')
-    .eq('table_id', Number(tableId))
+    .eq('table_id', Number(actualTableId))
     .eq('date', date)
     .eq('time', time)
     .in('status', ['pending', 'accepted'])
@@ -308,24 +323,37 @@ app.put('/reservations/:id', async (req, res) => {
   if (checkErr) return res.status(500).json({ error: 'Database error' });
   if (existing) return res.status(409).json({ error: 'Table already reserved for this time' });
 
-  const { data: updated, error: updateErr } = await supabase
-    .from('reservations')
-    .update({
-      table_id: Number(tableId),
-      name,
-      phone: phone || null,
-      date,
-      time,
-      guests: Number(guests),
-      status
-    })
-    .eq('id', id)
-    .select();
+  const mappedObject = {
+    table_id: Number(actualTableId),
+    name,
+    phone: phone || null,
+    date,
+    time,
+    guests: Number(guests),
+    status,
+    additional_info: additionalInfo || null
+  };
+  console.log("💾 SUPABASE MAPPING:", mappedObject);
 
-  if (updateErr) return res.status(500).json({ error: 'Database error' });
-  if (!updated || updated.length === 0) return res.status(404).json({ error: 'Reservation not found' });
+  try {
+    const { data: updated, error: updateErr } = await supabase
+      .from('reservations')
+      .update(mappedObject)
+      .eq('id', id)
+      .select();
 
-  res.json({ id, status: 'updated' });
+    if (updateErr) {
+      console.error('SUPABASE_CRASH_REPORT:', updateErr.message);
+      return res.status(500).json({ error: 'Database error' });
+    }
+
+    if (!updated || updated.length === 0) return res.status(404).json({ error: 'Reservation not found' });
+
+    res.json({ id, status: 'updated' });
+  } catch (err) {
+    console.error('SUPABASE_CRASH_REPORT:', err.message);
+    return res.status(500).json({ error: 'Server error' });
+  }
 });
 
 app.patch('/reservations/:id/accept', async (req, res) => {

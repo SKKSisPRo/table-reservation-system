@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { supabase } from '../../supabase';
+import TimeDropdown from '../TimeDropdown';
 
 export default function ReservationsView() {
   const [reservations, setReservations] = useState([]);
@@ -16,7 +17,7 @@ export default function ReservationsView() {
   const fetchReservations = async () => {
     setLoading(true);
     try {
-      const res = await fetch('http://localhost:3000/reservations');
+      const res = await fetch('http://localhost:5000/reservations');
       const data = await res.json();
       setReservations(data);
     } catch (err) {
@@ -28,7 +29,7 @@ export default function ReservationsView() {
 
   useEffect(() => {
     fetchReservations();
-    fetch('http://localhost:3000/tables')
+    fetch('http://localhost:5000/tables')
       .then(res => res.json())
       .then(setTablesData)
       .catch(console.error);
@@ -48,7 +49,7 @@ export default function ReservationsView() {
   const handleDelete = async (id) => {
     if (window.confirm("Er du sikker på at du vil slette denne reservasjonen?")) {
       try {
-        await fetch(`http://localhost:3000/reservations/${id}`, { method: 'DELETE' });
+        await fetch(`http://localhost:5000/reservations/${id}`, { method: 'DELETE' });
         fetchReservations();
       } catch (err) {
         console.error('Delete error', err);
@@ -58,12 +59,13 @@ export default function ReservationsView() {
 
   const handleEditSubmit = async (e) => {
     e.preventDefault();
-    console.log("ReservationsView - Sending to backend:", editModal.data);
+    const payload = editModal.data;
+    console.log("🚀 SENDING PAYLOAD:", payload);
     try {
-      await fetch(`http://localhost:3000/reservations/${editModal.data.id}`, {
+      await fetch(`http://localhost:5000/reservations/${editModal.data.id}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(editModal.data)
+        body: JSON.stringify(payload)
       });
       fetchReservations();
     } catch (err) {
@@ -150,6 +152,7 @@ export default function ReservationsView() {
                   <th className="p-4 font-semibold text-gray-700">Telefon</th>
                   <th className="p-4 font-semibold text-gray-700">Gjester</th>
                   <th className="p-4 font-semibold text-gray-700">Bord</th>
+                  <th className="p-4 font-semibold text-gray-700">Info</th>
                   <th className="p-4 font-semibold text-gray-700 text-right">Handlinger</th>
                 </tr>
               </thead>
@@ -164,6 +167,7 @@ export default function ReservationsView() {
                     <td className="p-4 text-gray-600">{r.phone}</td>
                     <td className="p-4 text-gray-600">{r.guests} pers</td>
                     <td className="p-4 text-gray-600 font-semibold">{r.table_name || `Bord ${r.table_id}`}</td>
+                    <td className="p-4 text-gray-600 max-w-[150px] truncate" title={r.additionalInfo}>{r.additionalInfo ? r.additionalInfo : "—"}</td>
                     <td className="p-4 text-right">
                       <button 
                         onClick={() => setEditModal({ open: true, data: { ...r, tableId: r.table_id } })}
@@ -203,29 +207,28 @@ export default function ReservationsView() {
                   <label className="text-sm font-semibold text-gray-600">Navn</label>
                   <input type="text" value={editModal.data.name} onChange={e => setEditModal({...editModal, data: {...editModal.data, name: e.target.value}})} className="border border-gray-300 rounded px-3 py-2" required />
                 </div>
-                <div className="flex-1 flex flex-col gap-1">
+                <div className="w-48 flex flex-col gap-1">
                   <label className="text-sm font-semibold text-gray-600">Telefon</label>
                   <input type="text" value={editModal.data.phone || ''} onChange={e => setEditModal({...editModal, data: {...editModal.data, phone: e.target.value}})} className="border border-gray-300 rounded px-3 py-2" />
                 </div>
               </div>
               
-              <div className="flex gap-4">
+              <div className="flex items-end gap-4">
                 <div className="flex-1 flex flex-col gap-1">
                   <label className="text-sm font-semibold text-gray-600">Dato</label>
-                  <input type="date" value={editModal.data.date} onChange={e => setEditModal({...editModal, data: {...editModal.data, date: e.target.value}})} className="border border-gray-300 rounded px-3 py-2" required />
+                  <input type="date" value={editModal.data.date} onChange={e => setEditModal({...editModal, data: {...editModal.data, date: e.target.value}})} className="border border-gray-300 rounded px-3 py-2 h-10" required />
                 </div>
-                <div className="flex-1 flex flex-col gap-1">
-                  <label className="text-sm font-semibold text-gray-600">Tid</label>
-                  <input type="time" value={editModal.data.time} onChange={e => setEditModal({...editModal, data: {...editModal.data, time: e.target.value}})} className="border border-gray-300 rounded px-3 py-2" required />
+                <div className="flex-1">
+                  <TimeDropdown value={editModal.data.time} onChange={t => setEditModal({...editModal, data: {...editModal.data, time: t}})} date={editModal.data.date} />
                 </div>
               </div>
 
               <div className="flex gap-4 mb-4">
-                <div className="flex-1 flex flex-col gap-1">
+                <div className="w-20 flex flex-col gap-1">
                   <label className="text-sm font-semibold text-gray-600">Gjester</label>
                   <input type="number" min="1" max="20" value={editModal.data.guests} onChange={e => setEditModal({...editModal, data: {...editModal.data, guests: e.target.value}})} className="border border-gray-300 rounded px-3 py-2" required />
                 </div>
-                <div className="flex-1 flex flex-col gap-1">
+                <div className="w-20 flex flex-col gap-1">
                   <label className="text-sm font-semibold text-gray-600">Bord</label>
                   <input type="text" disabled value={editModal.data.table_name || `Bord ${editModal.data.tableId}`} className="border border-gray-200 bg-gray-50 text-gray-500 rounded px-3 py-2 cursor-not-allowed" />
                 </div>
@@ -237,6 +240,11 @@ export default function ReservationsView() {
                     <option value="declined">Declined</option>
                   </select>
                 </div>
+              </div>
+
+              <div className="flex flex-col gap-1">
+                <label className="text-sm font-semibold text-gray-600">Tilleggsinformasjon</label>
+                <input type="text" value={editModal.data.additionalInfo || ''} onChange={e => setEditModal({...editModal, data: {...editModal.data, additionalInfo: e.target.value}})} className="border border-gray-300 rounded px-3 py-2" />
               </div>
 
               {isOverCapacity && (
