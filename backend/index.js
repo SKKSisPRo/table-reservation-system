@@ -150,6 +150,28 @@ app.get('/tables/availability', async (req, res) => {
   res.json(availableTables);
 });
 
+app.get('/api/occupied-tables', async (req, res) => {
+  const { date, time } = req.query;
+  if (!date || !time) {
+    return res.status(400).json({ error: 'Missing date or time' });
+  }
+
+  const { data, error } = await supabase
+    .from('reservations')
+    .select('table_id')
+    .eq('date', date)
+    .eq('time', time)
+    .in('status', ['pending', 'accepted']);
+
+  if (error) {
+    console.error('GET /api/occupied-tables error:', error);
+    return res.status(500).json({ error: 'Database error' });
+  }
+
+  const tableIds = data.map(r => r.table_id);
+  res.json(tableIds);
+});
+
 /* =====================
    Reservations (Admin + Requests)
 ===================== */

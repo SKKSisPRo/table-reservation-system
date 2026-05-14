@@ -49,6 +49,31 @@ export default function Step2FloorPlan({ bookingDetails, onBack, onSuccess }) {
   const [tables, setTables] = useState([]);
   const [availableIds, setAvailableIds] = useState(new Set());
   const [selectedTable, setSelectedTable] = useState(null);
+  const [reservations, setReservations] = useState([]);
+
+  useEffect(() => {
+    const fetchReservations = async () => {
+      try {
+        const res = await fetch('http://localhost:5000/reservations');
+        const data = await res.json();
+        setReservations(data);
+      } catch (err) {
+        console.error('Fetch error:', err);
+      }
+    };
+    fetchReservations();
+  }, [bookingDetails.date, bookingDetails.time]);
+
+  const reservationsForDate = reservations.filter(r => r.date === bookingDetails.date && r.time === bookingDetails.time);
+
+  useEffect(() => {
+    if (selectedTable) {
+      const isOccupied = reservationsForDate.some(r => r.table_name === selectedTable.name || `Table ${r.table_id}` === selectedTable.name);
+      if (isOccupied) {
+        setSelectedTable(null);
+      }
+    }
+  }, [reservationsForDate, selectedTable]);
 
   const [form, setForm] = useState({
     firstName: '',
@@ -254,18 +279,22 @@ export default function Step2FloorPlan({ bookingDetails, onBack, onSuccess }) {
               const isAvailable = availableIds.has(tableData.id);
               const isSelected = selectedTable?.id === tableData.id;
               const isTooSmall = Number(form.guests) > tableData.capacity;
+              const tableRes = reservationsForDate.filter(r => r.table_name === pos.name || `Table ${r.table_id}` === pos.name);
+              const isOccupied = tableRes.length > 0;
 
-              let bgClass = "bg-dickens-red opacity-80 cursor-not-allowed"; // Occupied
-              if (isTooSmall) bgClass = "bg-gray-400 opacity-60 cursor-not-allowed"; // Too small
+              let bgClass = "bg-dickens-green"; // Available
+              if (isOccupied) bgClass = "!bg-dickens-red shadow-md text-white cursor-not-allowed"; // Occupied from Admin
+              else if (isTooSmall) bgClass = "bg-gray-400 opacity-60 cursor-not-allowed"; // Too small
               else if (isSelected) bgClass = "bg-dickens-gold shadow-[0_0_10px_rgba(139,134,78,0.8)] scale-110 z-10"; // Selected
               else if (isAvailable) bgClass = "bg-dickens-green hover:bg-dickens-lightgreen cursor-pointer"; // Available
 
               return (
                 <button
                   key={pos.name}
-                  disabled={!isAvailable || isTooSmall}
+                  disabled={isOccupied || !isAvailable || isTooSmall}
                   title={isTooSmall ? "Too small for your group" : ""}
                   onClick={() => {
+                    if (isOccupied) return;
                     setSelectedTable(tableData);
                     if (form.guests < 1) setForm({ ...form, guests: tableData.capacity });
                   }}
@@ -287,18 +316,22 @@ export default function Step2FloorPlan({ bookingDetails, onBack, onSuccess }) {
             const isAvailable = availableIds.has(tableData.id);
             const isSelected = selectedTable?.id === tableData.id;
             const isTooSmall = Number(form.guests) > tableData.capacity;
+            const tableRes = reservationsForDate.filter(r => r.table_name === pos.name || `Table ${r.table_id}` === pos.name);
+            const isOccupied = tableRes.length > 0;
 
-            let bgClass = "bg-dickens-red opacity-80 cursor-not-allowed"; // Occupied
-            if (isTooSmall) bgClass = "bg-gray-400 opacity-60 cursor-not-allowed"; // Too small
+            let bgClass = "bg-dickens-green"; // Available
+            if (isOccupied) bgClass = "!bg-dickens-red shadow-md text-white cursor-not-allowed"; // Occupied from Admin
+            else if (isTooSmall) bgClass = "bg-gray-400 opacity-60 cursor-not-allowed"; // Too small
             else if (isSelected) bgClass = "bg-dickens-gold shadow-[0_0_10px_rgba(139,134,78,0.8)] scale-110 z-10"; // Selected
             else if (isAvailable) bgClass = "bg-dickens-green hover:bg-dickens-lightgreen cursor-pointer"; // Available
 
             return (
               <button
                 key={pos.name}
-                disabled={!isAvailable || isTooSmall}
+                disabled={isOccupied || !isAvailable || isTooSmall}
                 title={isTooSmall ? "Too small for your group" : ""}
                 onClick={() => {
+                  if (isOccupied) return;
                   setSelectedTable(tableData);
                   if (form.guests < 1) setForm({ ...form, guests: tableData.capacity });
                 }}
