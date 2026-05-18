@@ -19,7 +19,7 @@ const COUNTRIES = [
 
 const MONTH_NAMES = ["januar", "februar", "mars", "april", "mai", "juni", "juli", "august", "september", "oktober", "november", "desember"];
 
-const RESERVATION_DURATION_MIN = 120;
+const RESERVATION_DURATION_MIN = 90;
 
 function timeToMinutes(t) {
   if (!t) return null;

@@ -13,7 +13,7 @@ const supabase = createClient(supabaseUrl, supabaseKey);
 
 const PORT = 5000;
 
-const RESERVATION_DURATION_MIN = 120;
+const RESERVATION_DURATION_MIN = 90;
 
 function timeToMinutes(t) {
   if (!t) return null;
