@@ -124,7 +124,7 @@ export default function Step2FloorPlan({ bookingDetails, onBack, onSuccess }) {
       try {
         setLoading(true);
         // Fetch all tables
-        const resAll = await fetch('http://localhost:3000/tables?areaId=1');
+        const resAll = await fetch('http://localhost:5000/tables?areaId=1');
         const allTables = await resAll.json();
         setTables(allTables);
 
@@ -136,7 +136,7 @@ export default function Step2FloorPlan({ bookingDetails, onBack, onSuccess }) {
           level: 1,
           outdoor: 0
         });
-        const resAvail = await fetch(`http://localhost:3000/tables/availability?${query}`);
+        const resAvail = await fetch(`http://localhost:5000/tables/availability?${query}`);
         if (resAvail.ok) {
           const availTables = await resAvail.json();
           setAvailableIds(new Set(availTables.map(t => t.id)));
@@ -454,7 +454,7 @@ export default function Step2FloorPlan({ bookingDetails, onBack, onSuccess }) {
                   className="border border-gray-300 rounded px-1 py-1.5 text-xs cursor-not-allowed text-center h-10 bg-white text-gray-800"
                 />
               </div>
-              
+
               <TimeDropdown value={form.time} onChange={t => setForm({ ...form, time: t })} date={bookingDetails.date} />
 
               <GuestDropdown value={form.guests} onChange={val => setForm({ ...form, guests: val })} />
