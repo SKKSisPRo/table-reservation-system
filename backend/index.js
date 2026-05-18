@@ -13,6 +13,21 @@ const supabase = createClient(supabaseUrl, supabaseKey);
 
 const PORT = 5000;
 
+const RESERVATION_DURATION_MIN = 120;
+
+function timeToMinutes(t) {
+  if (!t) return null;
+  const [h, m] = t.split(':').map(Number);
+  return h * 60 + (m || 0);
+}
+
+function timesOverlap(t1, t2, duration = RESERVATION_DURATION_MIN) {
+  const m1 = timeToMinutes(t1);
+  const m2 = timeToMinutes(t2);
+  if (m1 === null || m2 === null) return false;
+  return Math.abs(m1 - m2) < duration;
+}
+
 /* =====================
    Helper validation functions
 ===================== */
@@ -134,17 +149,19 @@ app.get('/tables/availability', async (req, res) => {
 
   if (tableErr) return res.status(500).json({ error: 'Database error' });
 
-  // Get conflicting reservations
+  // Get reservations on this date and exclude tables whose booking window
+  // overlaps with the requested time (RESERVATION_DURATION_MIN on each side).
   const { data: reservations, error: resErr } = await supabase
     .from('reservations')
-    .select('table_id')
+    .select('table_id, time')
     .eq('date', date)
-    .eq('time', time)
     .in('status', ['pending', 'accepted']);
 
   if (resErr) return res.status(500).json({ error: 'Database error' });
 
-  const bookedTableIds = new Set(reservations.map(r => r.table_id));
+  const bookedTableIds = new Set(
+    reservations.filter(r => timesOverlap(r.time, time)).map(r => r.table_id)
+  );
   const availableTables = tables.filter(t => !bookedTableIds.has(t.id));
 
   res.json(availableTables);
@@ -158,9 +175,8 @@ app.get('/api/occupied-tables', async (req, res) => {
 
   const { data, error } = await supabase
     .from('reservations')
-    .select('table_id')
+    .select('table_id, time')
     .eq('date', date)
-    .eq('time', time)
     .in('status', ['pending', 'accepted']);
 
   if (error) {
@@ -168,7 +184,7 @@ app.get('/api/occupied-tables', async (req, res) => {
     return res.status(500).json({ error: 'Database error' });
   }
 
-  const tableIds = data.map(r => r.table_id);
+  const tableIds = data.filter(r => timesOverlap(r.time, time)).map(r => r.table_id);
   res.json(tableIds);
 });
 
@@ -240,19 +256,18 @@ app.post('/reservations', async (req, res) => {
     return res.status(400).json({ error: `This table only has capacity for ${table.capacity} guests` });
   }
 
-  // Prevent double booking
+  // Prevent double booking — block if any existing reservation's window overlaps
   const { data: existing, error: checkErr } = await supabase
     .from('reservations')
-    .select('id')
+    .select('id, time')
     .eq('table_id', Number(tableId))
     .eq('date', date)
-    .eq('time', time)
-    .in('status', ['pending', 'accepted'])
-    .limit(1)
-    .maybeSingle();
+    .in('status', ['pending', 'accepted']);
 
   if (checkErr) return res.status(500).json({ error: 'Database error' });
-  if (existing) return res.status(409).json({ error: 'Table already reserved for this time' });
+  if ((existing || []).some(r => timesOverlap(r.time, time))) {
+    return res.status(409).json({ error: 'Table already reserved for this time' });
+  }
 
   // Expires at logic (+30 mins)
   const dt = parseBookingDateTime(date, time);
@@ -330,20 +345,19 @@ app.put('/reservations/:id', async (req, res) => {
     return res.status(400).json({ error: `This table only has capacity for ${table.capacity} guests` });
   }
 
-  // Double booking check for edit
+  // Double booking check for edit — block if any other reservation's window overlaps
   const { data: existing, error: checkErr } = await supabase
     .from('reservations')
-    .select('id')
+    .select('id, time')
     .eq('table_id', Number(actualTableId))
     .eq('date', date)
-    .eq('time', time)
     .in('status', ['pending', 'accepted'])
-    .neq('id', id)
-    .limit(1)
-    .maybeSingle();
+    .neq('id', id);
 
   if (checkErr) return res.status(500).json({ error: 'Database error' });
-  if (existing) return res.status(409).json({ error: 'Table already reserved for this time' });
+  if ((existing || []).some(r => timesOverlap(r.time, time))) {
+    return res.status(409).json({ error: 'Table already reserved for this time' });
+  }
 
   const mappedObject = {
     table_id: Number(actualTableId),

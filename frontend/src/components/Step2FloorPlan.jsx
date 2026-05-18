@@ -19,6 +19,21 @@ const COUNTRIES = [
 
 const MONTH_NAMES = ["januar", "februar", "mars", "april", "mai", "juni", "juli", "august", "september", "oktober", "november", "desember"];
 
+const RESERVATION_DURATION_MIN = 120;
+
+function timeToMinutes(t) {
+  if (!t) return null;
+  const [h, m] = t.split(':').map(Number);
+  return h * 60 + (m || 0);
+}
+
+function timesOverlap(t1, t2, duration = RESERVATION_DURATION_MIN) {
+  const m1 = timeToMinutes(t1);
+  const m2 = timeToMinutes(t2);
+  if (m1 === null || m2 === null) return false;
+  return Math.abs(m1 - m2) < duration;
+}
+
 const MAP_TABLES = [
   // T-row (Top)
   { name: 'T1', top: '4%', left: '4%' },
@@ -64,17 +79,6 @@ export default function Step2FloorPlan({ bookingDetails, onBack, onSuccess }) {
     fetchReservations();
   }, [bookingDetails.date, bookingDetails.time]);
 
-  const reservationsForDate = reservations.filter(r => r.date === bookingDetails.date && r.time === bookingDetails.time);
-
-  useEffect(() => {
-    if (selectedTable) {
-      const isOccupied = reservationsForDate.some(r => r.table_name === selectedTable.name || `Table ${r.table_id}` === selectedTable.name);
-      if (isOccupied) {
-        setSelectedTable(null);
-      }
-    }
-  }, [reservationsForDate, selectedTable]);
-
   const [form, setForm] = useState({
     firstName: '',
     lastName: '',
@@ -92,6 +96,21 @@ export default function Step2FloorPlan({ bookingDetails, onBack, onSuccess }) {
     }, 500);
     return () => clearTimeout(handler);
   }, [form.time]);
+
+  const reservationsForDate = reservations.filter(r =>
+    r.date === bookingDetails.date &&
+    ['pending', 'accepted'].includes(r.status) &&
+    timesOverlap(r.time, form.time)
+  );
+
+  useEffect(() => {
+    if (selectedTable) {
+      const isOccupied = reservationsForDate.some(r => r.table_name === selectedTable.name || `Table ${r.table_id}` === selectedTable.name);
+      if (isOccupied) {
+        setSelectedTable(null);
+      }
+    }
+  }, [reservationsForDate, selectedTable]);
 
   const [loading, setLoading] = useState(true);
   const [submitted, setSubmitted] = useState(false);
