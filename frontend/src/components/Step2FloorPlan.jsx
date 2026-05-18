@@ -105,7 +105,7 @@ export default function Step2FloorPlan({ bookingDetails, onBack, onSuccess }) {
 
   useEffect(() => {
     if (selectedTable) {
-      const isOccupied = reservationsForDate.some(r => r.table_name === selectedTable.name || `Table ${r.table_id}` === selectedTable.name);
+      const isOccupied = reservationsForDate.some(r => r.table_id === selectedTable.id || r.table_name === selectedTable.name);
       if (isOccupied) {
         setSelectedTable(null);
       }
@@ -157,8 +157,15 @@ export default function Step2FloorPlan({ bookingDetails, onBack, onSuccess }) {
     // Supabase Realtime Subscription
     const channel = supabase
       .channel('public:reservations_floorplan')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'reservations' }, () => {
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'reservations' }, async () => {
         fetchData();
+        try {
+          const res = await fetch('http://localhost:5000/reservations');
+          const data = await res.json();
+          setReservations(data);
+        } catch (err) {
+          console.error('Fetch error (realtime):', err);
+        }
       })
       .subscribe();
 
@@ -298,7 +305,7 @@ export default function Step2FloorPlan({ bookingDetails, onBack, onSuccess }) {
               const isAvailable = availableIds.has(tableData.id);
               const isSelected = selectedTable?.id === tableData.id;
               const isTooSmall = Number(form.guests) > tableData.capacity;
-              const tableRes = reservationsForDate.filter(r => r.table_name === pos.name || `Table ${r.table_id}` === pos.name);
+              const tableRes = reservationsForDate.filter(r => r.table_id === tableData.id || r.table_name === pos.name);
               const isOccupied = tableRes.length > 0;
 
               let bgClass = "bg-dickens-green"; // Available
@@ -335,7 +342,7 @@ export default function Step2FloorPlan({ bookingDetails, onBack, onSuccess }) {
             const isAvailable = availableIds.has(tableData.id);
             const isSelected = selectedTable?.id === tableData.id;
             const isTooSmall = Number(form.guests) > tableData.capacity;
-            const tableRes = reservationsForDate.filter(r => r.table_name === pos.name || `Table ${r.table_id}` === pos.name);
+            const tableRes = reservationsForDate.filter(r => r.table_id === tableData.id || r.table_name === pos.name);
             const isOccupied = tableRes.length > 0;
 
             let bgClass = "bg-dickens-green"; // Available
