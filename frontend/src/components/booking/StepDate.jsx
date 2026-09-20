@@ -1,6 +1,6 @@
 import { useState } from 'react';
 
-export default function Step1Calendar({ onSelect }) {
+export default function StepDate({ date, onNext, onBack }) {
   const today = new Date();
   const [currentDate, setCurrentDate] = useState(new Date(today.getFullYear(), today.getMonth(), 1));
 
@@ -31,6 +31,10 @@ export default function Step1Calendar({ onSelect }) {
 
   return (
     <div className="flex flex-col items-center w-full max-w-4xl mx-auto py-4">
+      <div className="w-full max-w-md flex justify-start mb-2">
+        <button onClick={onBack} className="text-dickens-green hover:underline text-sm">&larr; Tilbake</button>
+      </div>
+
       <h1 className="font-gothic text-4xl md:text-5xl text-dickens-green mb-6 text-center drop-shadow-sm">
         Velg dato for besøket
       </h1>
@@ -65,14 +69,17 @@ export default function Step1Calendar({ onSelect }) {
             const cellDate = new Date(currentDate.getFullYear(), currentDate.getMonth(), day);
             const isDisabled = cellDate < minDate;
             const dateStr = `${currentDate.getFullYear()}-${String(currentDate.getMonth() + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+            const isSelected = dateStr === date;
 
             return (
               <button
                 key={index}
                 disabled={isDisabled}
-                onClick={() => onSelect(dateStr)}
+                onClick={() => onNext(dateStr)}
                 className={`h-10 flex items-center justify-center rounded-lg text-base font-medium border shadow-sm transition-colors ${isDisabled
                     ? 'bg-gray-200 text-gray-400 border-gray-200 cursor-not-allowed'
+                    : isSelected
+                    ? 'bg-dickens-gold text-white border-dickens-gold'
                     : 'bg-gray-50 text-gray-800 hover:bg-dickens-gold hover:text-white border-gray-100'
                   }`}
               >
